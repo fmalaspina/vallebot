@@ -11,7 +11,11 @@ services:
       - IS_PERSISTENT=TRUE                # activa modo disco
       - PERSIST_DIRECTORY=/chroma/chroma  # dónde guardar los vectores
     restart: unless-stopped               # arranca tras un reboot
-
+    healthcheck:                          # <-  ping al endpoint de latido
+      test: ["CMD", "curl", "-fs", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
   # 2. Tu aplicación FastAPI
   app:
     build: ./backend                      # usa el Dockerfile que sigue
@@ -22,5 +26,6 @@ services:
       - CHROMA_HOST=chroma
       - CHROMA_PORT=8000
     depends_on:
-      - chroma
+      chroma:
+        condition: service_healthy        # <- espera a que esté listo
     restart: unless-stopped

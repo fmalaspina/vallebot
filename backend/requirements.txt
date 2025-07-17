@@ -1,3 +1,4 @@
 fastapi
 uvicorn[standard]
-chromadb-client         
+chromadb-client==0.6.3  
+pydantic       
