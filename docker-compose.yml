@@ -1,0 +1,26 @@
+services:
+  # 1. Base de datos vectorial Chroma
+  chroma:
+    image: chromadb/chroma:0.6.3          # imagen oficial estable 🗄️
+    container_name: chroma
+    ports:
+      - "8000:8000"                       # API REST de Chroma
+    volumes:
+      - ./chroma_data:/chroma/chroma      # persistencia local
+    environment:
+      - IS_PERSISTENT=TRUE                # activa modo disco
+      - PERSIST_DIRECTORY=/chroma/chroma  # dónde guardar los vectores
+    restart: unless-stopped               # arranca tras un reboot
+
+  # 2. Tu aplicación FastAPI
+  app:
+    build: ./backend                      # usa el Dockerfile que sigue
+    container_name: backend
+    ports:
+      - "8001:8001"                       # expone la API de tu servicio
+    environment:
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+    depends_on:
+      - chroma
+    restart: unless-stopped
