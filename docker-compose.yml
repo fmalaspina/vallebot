@@ -1,31 +1,43 @@
 services:
   # 1. Base de datos vectorial Chroma
-  chroma:
-    image: chromadb/chroma:0.6.3          # imagen oficial estable 🗄️
-    container_name: chroma
+  # ollama:
+  #   image: ollama/ollama:0.9.6
+  #   container_name: ollama
+  #   ports:
+  #     - "11534:11434"
+  #   volumes:
+  #     - ./ollama_data:/root/.ollama
+  #   restart: unless-stopped
+  #   environment:
+  #     - OLLAMA_KEEP_ALIVE=24h 
+
+  
+    
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-vallebot}
+      POSTGRES_USER: ${POSTGRES_USER:-vallebot}
+      POSTGRES_PASSWORD: ${PORSTGRES_PASSWORD:-secret}
     ports:
-      - "8000:8000"                       # API REST de Chroma
+      - "5432:5432"
     volumes:
-      - ./chroma_data:/chroma/chroma      # persistencia local
-    environment:
-      - IS_PERSISTENT=TRUE                # activa modo disco
-      - PERSIST_DIRECTORY=/chroma/chroma  # dónde guardar los vectores
-    restart: unless-stopped               # arranca tras un reboot
-    healthcheck:                          # <-  ping al endpoint de latido
-      test: ["CMD", "curl", "-fs", "http://localhost:8000/api/v1/heartbeat"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      - ./pgdata:/var/lib/postgresql/data
+    
   # 2. Tu aplicación FastAPI
-  app:
-    build: ./backend                      # usa el Dockerfile que sigue
-    container_name: backend
-    ports:
-      - "8001:8001"                       # expone la API de tu servicio
-    environment:
-      - CHROMA_HOST=chroma
-      - CHROMA_PORT=8000
-    depends_on:
-      chroma:
-        condition: service_healthy        # <- espera a que esté listo
-    restart: unless-stopped
+#   app:
+#     build: ./backend                      # usa el Dockerfile que sigue
+#     container_name: backend
+#     ports:
+#       - "8001:8001"                       # expone la API de tu servicio
+#     environment:
+#       - USER_AGENT=vallebot-backend/0.1
+#       - CHROMA_HOST=chroma
+#       - CHROMA_PORT=8000
+#  #     - OLLAMA_BASE_URL=http://ollama:11534
+#  #     - OLLAMA_MODEL=llama3:8b
+#     depends_on:
+#       chroma:
+#         condition: service_started        # <- espera a que esté listo
+     
+#     restart: unless-stopped
