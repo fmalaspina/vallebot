@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String, Boolean, Date, Time, JSON, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()

@@ -3,6 +3,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from dotenv import load_dotenv
 from app.models import Base
 from sqlalchemy import text
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+
 # Cargar .env
 load_dotenv()
 
@@ -19,3 +22,8 @@ async def init_db():
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
         # Crear las tablas si no existen
         await conn.run_sync(Base.metadata.create_all)
+
+
+
+def generar_embedding(texto: str):
+    return model.encode(texto).tolist()
