@@ -11,9 +11,9 @@ from app.embedding_service import embed_text
 from app.models import Profesional
 from app.routers import whatsapp  # – agrega invites.router si lo mantienes
 import logging
-logging.basicConfig(level="DEBUG")
-settings = get_settings()
 
+settings = get_settings()
+logging.basicConfig(level=settings.LOG_LEVEL)
 # ---------------------------------------------------------------------------
 # Pydantic schemas de entrada
 # ---------------------------------------------------------------------------

@@ -7,10 +7,12 @@ from sqlalchemy import select
 from app.db import get_session
 from app.models import ProfessionalInvite, Profesional
 from app.embedding_service import embed_text
+from app.config import get_settings
 from app.llm_client import achat_completion  # tu wrapper a ollama / OpenAI
 import logging
-logging.basicConfig(level="DEBUG")
-
+settings = get_settings()
+logging.basicConfig(level=settings.LOG_LEVEL)
+logger = logging.getLogger("whatsapp")
 router = APIRouter(prefix="/webhook/whatsapp", tags=["whatsapp"])
 
 # Campos requeridos para crear profesional
@@ -50,7 +52,7 @@ async def llm_parse_if_needed(texto: str) -> dict:
     
     resp = await achat_completion(messages=[{"role": "system", "content": SYSTEM},
             {"role": "user", "content": USER_TEMPLATE.format(texto=texto)}],
-            model="llama2:latest",
+            model= settings.LLM_MODEL,
             temperature=0.0,        
             stop=None)
     try:
@@ -83,7 +85,10 @@ async def whatsapp_webhook(payload: dict, session: AsyncSession = Depends(get_se
         texto = message["text"]["body"]
         telefono_from = message["from"]
     except (KeyError, IndexError):
-        return {"status": "error", "reply": "Formato WhatsApp inválido"}
+        
+        resp = {"status": "error", "reply": "Formato WhatsApp inválido"}
+        logger.info("Whatsapp response %s",resp)
+        return resp
 
     # ---- 2. ¿Ya es profesional? ----
     prof_res = await session.execute(
@@ -91,10 +96,13 @@ async def whatsapp_webhook(payload: dict, session: AsyncSession = Depends(get_se
     )
     prof = prof_res.scalar_one_or_none()
     if prof:
-        return {
+        resp = {
             "status": "ok",
             "reply": f"Ya estás registrado como {prof.nombre}. (Alta previa)"
         }
+        logger.info("Whatsapp response %s",resp)
+        return resp
+
 
     # ---- 3. ¿Existe invitación para ese teléfono? ----
     inv_res = await session.execute(
@@ -102,21 +110,29 @@ async def whatsapp_webhook(payload: dict, session: AsyncSession = Depends(get_se
     )
     invite = inv_res.scalar_one_or_none()
     if not invite:
-        return {
+        resp = {
             "status": "error",
             "reply": "Tu número no está invitado todavía. Pide al administrador que te habilite."
         }
+        logger.info("Whatsapp response %s",resp)
+        return resp
+
 
     if invite.consumed:
         # Consistencia: debería existir profesional, pero por si no
-        return {
+        resp = {
             "status": "warning",
             "reply": "Tu invitación figura consumida, pero no encuentro registro. Contacta al admin."
         }
+        logger.info("Whatsapp response %s",resp)
+        return resp
+
+
 
     # ---- 4. Parse incremental ----
     parsed = simple_parse(texto)
-
+    logger.info("Whatsapp parsed response %s",parsed)
+        
     # Si falta nombre y no lo extrajo regex, podríamos intentar LLM:
     if "nombre" not in parsed:
         llm_extra = await llm_parse_if_needed(texto)
@@ -138,11 +154,14 @@ async def whatsapp_webhook(payload: dict, session: AsyncSession = Depends(get_se
     # ---- 6. ¿Faltan datos? -> pedirlos ----
     if missing:
         await session.commit()
-        return {
+        resp = {
             "status": "pending",
             "reply": build_missing_message(missing),
             "missing": missing
         }
+        logger.info("Whatsapp response %s",resp)
+        return resp
+
 
     # ---- 7. Crear Profesional ----
     nombre = partial["nombre"].strip()
@@ -157,14 +176,18 @@ async def whatsapp_webhook(payload: dict, session: AsyncSession = Depends(get_se
         bio=bio,
         embedding=embedding
     )
+    logger.info("Whatsapp nuevo profesional: nombre:%s bio:%s telefono:%s", nuevo.nombre,nuevo.bio,nuevo.telefono)
     session.add(nuevo)
     invite.consumed = True
     invite.used_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(nuevo)
 
-    return {
+    resp = {
         "status": "ok",
         "reply": f"¡Registro exitoso {nuevo.nombre}! Ya podés usar el servicio.",
         "profesional_id": nuevo.id
     }
+    logger.info("Whatsapp response %s",resp)
+    return resp
+

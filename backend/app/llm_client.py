@@ -1,65 +1,54 @@
 # app/llm_client.py
 """
-Cliente liviano para llamar a un modelo LLM expuesto vía HTTP
-(por ejemplo, Ollama con llama2).
-
-Variables leídas de app.config.Settings:
-    LLM_BASE_URL   →  'http://localhost:11434'
-    LLM_MODEL      →  'llama2:latest'
-    LLM_TIMEOUT    →  segundos (default 60)
-
-Funciona tanto síncrono como asíncrono (httpx).
+Cliente liviano para llamar a un modelo LLM (OpenAI ChatGPT)
 """
 
-
 from __future__ import annotations
-import logging
-import json
-from typing import Any, Iterable, AsyncIterator, Iterator, Dict, Mapping, Optional
 
-import httpx
-from sqlalchemy import Sequence
+import logging
+from typing import Any, AsyncIterator, Iterator, Mapping, Optional, Sequence
+
+from openai import OpenAI, AsyncOpenAI  # SDK ≥ 1.14
 from app.config import get_settings
 
 settings = get_settings()
 logger = logging.getLogger("llm")
-# -------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# OpenAI clients (se trae la API‑KEY de la variable de entorno)
+# ------------------------------------------------------------------
+# Podés setear OPENAI_API_BASE o OPENAI_ORG si hiciera falta.
+_api_key = settings.OPENAI_API_KEY
+_client_sync = OpenAI(api_key=_api_key,timeout=settings.LLM_TIMEOUT or 60.0)
+_client_async = AsyncOpenAI(api_key=_api_key,timeout=settings.LLM_TIMEOUT or 60.0)
+
+
+# ------------------------------------------------------------------
 # Helpers
-# -------------------------------------------------------------
-_HEADERS = {"Content-Type": "application/json"}
-_TIMEOUT = httpx.Timeout(settings.LLM_TIMEOUT or 60.0)
-
-
-def _format_chat(
-    prompt: str,
-    system_prompt: Optional[str] = None,
-    *,
-    temperature: float = 0.7,
-    max_tokens: int = 512,
-    stream: bool = False,
-    model: Optional[str] = None,
-) -> Dict[str, Any]:
+# ------------------------------------------------------------------
+def _build_messages(
+    prompt: str | None = None,
+    system_prompt: str | None = None,
+    messages: Sequence[Mapping[str, str]] | None = None,
+) -> list[dict[str, str]]:
     """
-    Construye el payload para /api/chat (formato Ollama).
-    Ajustá keys si tu servidor usa otra spec.
+    Convierte prompt/ system_prompt al formato de OpenAI.
+    Si ya viene `messages`, los devuelve tal cual.
     """
-    messages: list[dict[str, str]] = []
+    if messages is not None:
+        return list(messages)
+
+    built: list[dict[str, str]] = []
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
-    return {
-        "model": model or settings.LLM_MODEL,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "stream": stream,
-    }
+        built.append({"role": "system", "content": system_prompt})
+    if prompt:
+        built.append({"role": "user", "content": prompt})
+    return built
 
 
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
 # SYNC
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
 def chat_completion(
     prompt: str,
     *,
@@ -70,93 +59,95 @@ def chat_completion(
     model: str | None = None,
 ) -> str | Iterator[str]:
     """
-    Llama al LLM y devuelve:
-        - str con la respuesta completa (si stream=False)
-        - iterator de str (si stream=True)
+    Llama al modelo:
+
+    • stream = False → devuelve el texto completo.
+    • stream = True  → devuelve un generador con los fragmentos.
     """
-    payload = _format_chat(
-        prompt,
-        system_prompt,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=stream,
-        model=model,
-    )
-    url = f"{settings.LLM_BASE_URL}/api/chat"
+    model = model or settings.LLM_MODEL or "gpt-4o-mini"
+    messages = _build_messages(prompt, system_prompt)
 
-    with httpx.Client(timeout=_TIMEOUT, headers=_HEADERS) as client:
-        if stream:
-            logger.debug("LLM prompt → %s", payload["messages"])
-            r = client.post(url, json=payload, stream=True)
-            r.raise_for_status()
-            # Cada línea es un JSON con {"message": {"content": "…" }, ...}
-            def _gen() -> Iterator[str]:
-                for line in r.iter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    yield data.get("message", {}).get("content", "")
-            return _gen()
-        else:
-            logger.debug("LLM prompt → %s", payload["messages"])
-            r = client.post(url, json=payload)
-            r.raise_for_status()
-            data = r.json()
-            return data["message"]["content"]
+    logger.info("LLM prompt → %s", messages)
+
+    if stream:
+        response = _client_sync.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        logger.info("LLM response → %s", response)
+
+        def _gen() -> Iterator[str]:
+            for chunk in response:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+
+        return _gen()
+    else:
+        response = _client_sync.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        logger.info("LLM response → %s", response)
+
+        return response.choices[0].message.content
 
 
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
 # ASYNC
-# -------------------------------------------------------------
+# ------------------------------------------------------------------
 async def achat_completion(
-     *,                                         # Fuerza uso 100 % por keyword
+    *,                                         # uso 100 % keyword‑only
     messages: Sequence[Mapping[str, str]] | None = None,
-    prompt: str | None = None,                # compat. con la firma antigua
-    model: str = "llama2:latest",
+    prompt: str | None = None,
+    model: str | None = None,
     temperature: float = 0.0,
+    max_tokens: int = 512,
     stream: bool = False,
-    **extra,
+    **extra,                                  # para compatibilidad futura
 ) -> str | AsyncIterator[str]:
     """
-    Wrapper async para /api/chat de Ollama o similar.
-
-    - Si se pasa `prompt` (str) lo convertimos a messages = [{"role":"user",...}]
-    - Devuelve el contenido completo (str). Si `stream=True` yield‑ea fragmentos.
+    Wrapper async que replica la firma del cliente original.
     """
-    if prompt and not messages:
-        messages = [{"role": "user", "content": prompt}]
-    if not messages:
+    if prompt is None and messages is None:
         raise ValueError("Debes pasar `messages` o `prompt`")
 
-    payload = {
-        "model": model,
-        "messages": list(messages),
-        "temperature": temperature,
-         "stream": False, 
-        **extra,
-    }
+    model = model or settings.LLM_MODEL or "gpt-4o-mini"
+    msgs = _build_messages(prompt, None, messages)
 
-    logger.debug("LLM prompt → %s", messages)
-    url = f"{settings.LLM_BASE_URL}/api/chat"
+    logger.info("LLM prompt → %s", msgs)
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT, headers=_HEADERS) as client:
-        if stream:
-            logger.debug("LLM prompt → %s", payload["messages"])
-            r = await client.post(url, json=payload, stream=True)
-            r.raise_for_status()
+    if stream:
+        response = await _client_async.chat.completions.create(
+            model=model,
+            messages=msgs,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            **extra,
+        )
+        logger.info("LLM response → %s", response)
 
-            async def _agen() -> AsyncIterator[str]:
-                async for line in r.aiter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    yield data.get("message", {}).get("content", "")
-            logger.debug("LLM answer ← %s", data)
-            return _agen()
-        else:
-            logger.debug("LLM prompt → %s", payload["messages"])
-            r = await client.post(url, json=payload)
-            r.raise_for_status()
-            data = r.json()
-            logger.debug("LLM answer ← %s", data)
-            return data["message"]["content"]
+        async def _agen() -> AsyncIterator[str]:
+            async for chunk in response:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+
+        return _agen()
+    else:
+        response = await _client_async.chat.completions.create(
+            model=model,
+            messages=msgs,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **extra,
+        )
+        logger.info("LLM response → %s", response)
+
+        return response.choices[0].message.content

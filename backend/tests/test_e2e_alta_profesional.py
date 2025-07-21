@@ -8,7 +8,9 @@ from app.main import app
 from app.db import SessionLocal
 from app.models import ProfessionalInvite, Profesional
 import logging
-logging.basicConfig(level="DEBUG")
+from app.config import get_settings
+settings = get_settings()
+logging.basicConfig(level=settings.LOG_LEVEL)
 TEST_PHONE = "5491110000000"
 TEST_NAME = "[TEST] Dra. Ana López"
 TEST_BIO = "Psicóloga infanto-juvenil"
