@@ -9,7 +9,7 @@ function App() {
       <img
         src={logo}
         alt="Logo de ValleBot"
-        className="w-10 h-10 mb-4 animate-bounce drop-shadow-xl"
+        className="w-200 h-200 mb-4 animate-bounce drop-shadow-xl"
       />
 
       <div className="text-blue-900 font-sans text-xl sm:text-3xl font-semibold leading-relaxed tracking-wide max-w-100xl space-y-4">
